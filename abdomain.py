@@ -3,8 +3,14 @@ import torch
 import math
 
 class AbstractObject(object, metaclass=abc.ABCMeta):
+    """
+    """
+    
     @abc.abstractmethod
     def affine_transform(self, M, C):
+        """
+        Computes the affine transformation of the object Mx + C.
+        """
         raise NotImplementedError('users must define affine_transform to use this base class')
     @abc.abstractmethod
     def meet(self, b):
@@ -25,7 +31,6 @@ class AbstractObject(object, metaclass=abc.ABCMeta):
         raise NotImplementedError('users must define smooth_join to use this base class')
 
         
-        
 class AbsInterval(AbstractObject):    
     def __init__(self, L, H, alpha):
         """
@@ -34,20 +39,24 @@ class AbsInterval(AbstractObject):
             H: A vector that represents the interval's upper bound in each dimension
             alpha: A number that represents how close this interval is to disappearing
         """
+        assert(not torch.isnan(L).any())
+        assert(not torch.isnan(H).any())
+        assert(not math.isnan(alpha))
+        assert(not math.isinf(alpha))
+        
         self.L = L
         self.H = H
         self.alpha = alpha
     
     def __str__(self):
-        return "AbsInterval{%s, %f}" % (str(torch.cat([self.L, self.H], 0)), self.alpha)
+        return "AbsInterval{%s, %f}" % (str(torch.stack((self.L, self.H)).transpose(0, 1)), self.alpha)
     
     def __repr__(self):
         return str(self)
     
     def __eq__(self, other):
-        """Overrides the default implementation"""
         if isinstance(other, AbsInterval):
-            return torch.eq(self.L, other.L) and torch.eq(self.H, other.H) and math.isclose(self.alpha, other.alpha, rel_tol=1e-5)
+            return torch.equal(self.L, other.L) and torch.equal(self.H, other.H) and math.isclose(self.alpha, other.alpha, rel_tol=1e-5)
         return False
         
     def affine_transform(self, M, C):
@@ -55,10 +64,20 @@ class AbsInterval(AbstractObject):
         Represents the transform Mx + C where x is this interval.
         
         Args:
-            M: An nxn matrix where n is the number of dimensions
-            C: An n dimensional vector
+            M: An nxn matrix of finite real numbers where n is the number of dimensions
+            C: An n dimensional vector of finite real numbers
         """
-        return AbsInterval(M*self.L + C, M*self.H + C, self.alpha)
+        assert(not torch.isinf(M).any())
+        assert(not torch.isinf(C).any())
+        assert(not torch.isnan(M).any())
+        assert(not torch.isnan(C).any())
+        
+        newl = M*self.L + C
+        newh = M*self.H + C
+        # Replace nans, created with 0*inf, with 0
+        newl[newl != newl] = 0.0
+        newh[newh != newh] = 0.0
+        return AbsInterval(newl, newh, self.alpha)
     
     def meet(self, b):
         """
@@ -71,31 +90,32 @@ class AbsInterval(AbstractObject):
         boundary_point = torch.div(b.c, b.b) * -((b.b > 0).float())
         
         # First calculate the interval that contains the points satisfying b
-        Lb = torch.ones(self.L.shape).fill_(float('-inf'))
-        Hb = torch.ones(self.H.shape).fill_(float('inf'))
-        
-        Lb[b.b > 0] = boundary_point
-        Hb[b.b < 0] = boundary_point
+        Lb = torch.ones_like(self.L).fill_(float('-inf'))
+        Hb = torch.ones_like(self.H).fill_(float('inf'))
+        Lb[b.b > 0] = boundary_point[b.b > 0]
+        Hb[b.b < 0] = boundary_point[b.b < 0]
         
         # When b is 0, if c > 0 then we get [inf, -inf] (empty interval), else [-inf, inf]
-        Lb[b.b == 0 and b.c >= 0] = float('-inf')
-        Lb[b.b == 0 and b.c < 0] = float('inf')
-        Hb[b.b == 0 and b.c >= 0] = float('inf')
-        Hb[b.b == 0 and b.c < 0] = float('-inf')
-        
+        # This is the condition 0x + c > 0
+        Lb[(b.b == 0) & (b.c >= 0)] = float('-inf')
+        Lb[(b.b == 0) & (b.c < 0)] = float('inf')
+        Hb[(b.b == 0) & (b.c >= 0)] = float('inf')
+        Hb[(b.b == 0) & (b.c < 0)] = float('-inf')
 
         # Now we meet with [Lb, Hb]
         Lout = torch.max(self.L, Lb)
-        Lout[max(self.L, Lb) > min(self.H, Hb)] = float('inf')
-        
         Hout = torch.min(self.H, Hb)
-        Hout[max(self.L, Lb) > min(self.H, Hb)] = float('-inf')
         
-        return AbsInterval(Lout, Hout, self.update_alpha(Lout, Hout))
+        # When our lower bound is higher than our upper bound, set to the empty interval
+        emptymask = Lout > Hout
+        Lout[emptymask] = float('inf')
+        Hout[emptymask] = float('-inf')
+        
+        return AbsInterval(Lout, Hout, self.alpha * self.rho(Lout, Hout))
 
     def join(self, A):
         """
-        Hard-join of two intervals. Returns the hull of the two.
+        Sound-join of two intervals. Returns the hull of the two.
         """
         alpha = min(self.alpha + A.alpha, 1)
         lowbound = torch.min(self.L, A.L)
@@ -103,15 +123,38 @@ class AbsInterval(AbstractObject):
         
         return AbsInterval(lowbound, highbound, alpha)
     
-    def smooth_join(self, A):
+    @staticmethod
+    def smooth_join(obs):
+        #finite_obs = list(filter(lambda O: math.isfinite(AbsInterval.volume(O)), obs))
+        
+        #a_sum = sum(map(lambda O: O.alpha, finite_obs))
+        #a_out = min(a_sum, 1)
+        #ap = list(map(lambda O: O.alpha/a_sum, finite_obs))
+        # Centers and widths for each obj
+        #cw = list(map(lambda O: ((O.L + O.H)/2, O.H - O.L), finite_obs))
         pass
+        
+        # ignroe infinite for now
+        #infinite_obs = list(filter(lambda O: not math.isfinite(AbsInterval.volume(O)), obs))
+        
     
-    def update_alpha(self, L, H):
+    def rho(self, L, H):
         """
         Creates an updated alpha value based on the new interval.
         i.e., given the L and H calculated in O.meet(b), returns rho(O, b).
-        """
-        return 1
+        """        
+        beta = 1
+        const_lambda = 1/2
+        f_beta = min(1/2, const_lambda*beta)
+        if math.isinf(AbsInterval.volume(self.L, self.H)):
+            return 1 - f_beta
+        else:
+            return min(1, AbsInterval.volume(L, H) / (f_beta * AbsInterval.volume(self.L, self.H)))
     
-    def volume(self):
-        return torch.prod(self.H - self.L, 1)
+    @staticmethod
+    def volume(L, H):
+        vol = abs(torch.prod(H - L, 0))
+        if math.isnan(vol):
+            return float('inf')
+        return vol
+    

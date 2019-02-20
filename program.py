@@ -1,5 +1,6 @@
 import abc
 from functools import reduce
+import torch
 
 class ProgramStatement(object, metaclass=abc.ABCMeta):
     @abc.abstractmethod
@@ -14,7 +15,6 @@ class AssignStatement(ProgramStatement):
     """
     Represents assignment statements of the form x := Mx + C
     """
-    
     def __init__(self, M, C):
         self.M = M
         self.C = C
@@ -60,6 +60,10 @@ class IntervalBool(BoolConditional):
         b: 
     """
     def __init__(self, b, c):
+        assert(not torch.isinf(b).any())
+        assert(not torch.isinf(c).any())
+        assert(not torch.isnan(b).any())
+        assert(not torch.isnan(c).any())
         self.b = b
         self.c = c
         
