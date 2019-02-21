@@ -4,6 +4,7 @@ import math
 
 class AbstractObject(object, metaclass=abc.ABCMeta):
     """
+    Represents an object in an abstract domain for smooth abstract interpretation.
     """
     
     @abc.abstractmethod
@@ -15,23 +16,43 @@ class AbstractObject(object, metaclass=abc.ABCMeta):
     @abc.abstractmethod
     def meet(self, b):
         """
-        The abstract meet operator defined by A meet B where A is this abstract
-        object and B is the abstract object representing the points that satisfy 
-        boolean condition b.
+        Takes the classical meet between this abstract object and 
+        the abstract object representing the points that satisfy 
+        boolean condition b. By treating the abstract domain as a lattice, the
+        meet operator is defined as the greatest lower bound of the two.
         
         Requires:
-            b: a boolean condition
+            b: a BoolConditional
         """
         raise NotImplementedError('users must define meet to use this base class')
     @abc.abstractmethod
     def join(self, A):
+        """
+        Takes the classical join between this abstract object and 
+        another abstract object. By treating the abstract domain as a lattice,
+        the join operator is defined as the least upper bound of the two.
+        """
         raise NotImplementedError('users must define join to use this base class')
+    @staticmethod
     @abc.abstractmethod
-    def smooth_join(self, A):
+    def smooth_join(obs):
+        """
+        The novel operation that allows smoothing of programs. Its operation 
+        is described in S. Chaudhuri, M. Clochard, and A. Solar-Lezama, 
+        "Bridging boolean and quantitative synthesis using smoothed proof 
+        search," 2014.
+        
+        Requires:
+            obs: An iterable of abstract objects to join together
+        """
         raise NotImplementedError('users must define smooth_join to use this base class')
 
         
 class AbsInterval(AbstractObject):    
+    """
+    Represents an object in the interval abstract domain. This can represent constraints
+    of the form c <= x and x <= c.
+    """
     def __init__(self, L, H, alpha):
         """
         Args:
@@ -79,7 +100,7 @@ class AbsInterval(AbstractObject):
         newh[newh != newh] = 0.0
         return AbsInterval(newl, newh, self.alpha)
     
-    def meet(self, b):
+    def meet(self, b, optim_state):
         """
         Represents this interval meeting with an interval boolean condition b. 
         It returns an interval that contains the portion of this interval that satisfies b.
@@ -111,7 +132,7 @@ class AbsInterval(AbstractObject):
         Lout[emptymask] = float('inf')
         Hout[emptymask] = float('-inf')
         
-        return AbsInterval(Lout, Hout, self.alpha * self.rho(Lout, Hout))
+        return AbsInterval(Lout, Hout, self.alpha * self.rho(Lout, Hout, optim_state))
 
     def join(self, A):
         """
@@ -125,27 +146,44 @@ class AbsInterval(AbstractObject):
     
     @staticmethod
     def smooth_join(obs):
-        #finite_obs = list(filter(lambda O: math.isfinite(AbsInterval.volume(O)), obs))
+        """
+        Requires:
+            obs: an iterable of AbsInterval objects
+        """
+        # just do finite for now
+        assert(not torch.isinf(torch.tensor([AbsInterval.volume(O.L, O.H) for O in obs])).any())
         
-        #a_sum = sum(map(lambda O: O.alpha, finite_obs))
-        #a_out = min(a_sum, 1)
-        #ap = list(map(lambda O: O.alpha/a_sum, finite_obs))
+        alphas = torch.tensor([o.alpha for o in obs])
+        a_sum = torch.sum(alphas)
+        ap = alphas/torch.max(alphas)
         # Centers and widths for each obj
-        #cw = list(map(lambda O: ((O.L + O.H)/2, O.H - O.L), finite_obs))
-        pass
-        
-        # ignroe infinite for now
-        #infinite_obs = list(filter(lambda O: not math.isfinite(AbsInterval.volume(O)), obs))
-        
+        c = torch.stack([(o.L + o.H)/2 for o in obs])
+        w = torch.stack([(o.H - o.L)/2 for o in obs])
     
-    def rho(self, L, H):
+        # the center of gravity of interval centers
+        c_out = (torch.sum(c*alphas[:, None], 0))/a_sum
+
+        cp = ap[:, None]*c + (1 - ap[:, None])*c_out
+        wp = ap[:, None]*w
+        
+        # All of the created intervals
+        Li = cp - wp
+        Hi = cp + wp
+        
+        # Create bounding interval
+        L, _ = torch.min(Li, 0)
+        H, _ = torch.max(Hi, 0)
+        
+        a_out = min(a_sum, 1.0)
+        return AbsInterval(L, H, a_out)
+
+    
+    def rho(self, L, H, optim_state):
         """
         Creates an updated alpha value based on the new interval.
         i.e., given the L and H calculated in O.meet(b), returns rho(O, b).
         """        
-        beta = 1
-        const_lambda = 1/2
-        f_beta = min(1/2, const_lambda*beta)
+        f_beta = min(1/2, optim_state.lambda_const * optim_state.beta)
         if math.isinf(AbsInterval.volume(self.L, self.H)):
             return 1 - f_beta
         else:

@@ -4,10 +4,14 @@ import torch
 
 class ProgramStatement(object, metaclass=abc.ABCMeta):
     @abc.abstractmethod
-    def propagate(self, A):
+    def propagate(self, A, optim_state):
         """
         Taking an abstract object A, this represents applying the semantics of 
         this program statement to A.
+        
+        Requires:
+            A: The abstract object to manipulate.
+            optim_state: 
         """
         raise NotImplementedError('users must define propagate to use this base class')
         
@@ -19,17 +23,17 @@ class AssignStatement(ProgramStatement):
         self.M = M
         self.C = C
     
-    def propagate(self, A):
+    def propagate(self, A, optim_state):
         return A.affine_transform(self.M, self.C)
     
 class StatementBlock(ProgramStatement):
     def __init__(self, statements):
         self.statements = statements
     
-    def propagate(self, A):
+    def propagate(self, A, optim_state):
         res = A
         for stmt in self.statements:
-            res = stmt.propagate(res)
+            res = stmt.propagate(res, optim_state)
         return res
     
 class IfThenElse(ProgramStatement):
@@ -38,10 +42,13 @@ class IfThenElse(ProgramStatement):
         self.s1 = s1
         self.s2 = s2
     
-    def propagate(self, A):
-        res1 = self.s1.propagate(A.meet(self.b))
-        res2 = self.s2.propagate(A.meet(self.b.negate()))
-        return res1.join(res2)
+    def propagate(self, A, optim_state):
+        res1 = self.s1.propagate(A.meet(self.b, optim_state), optim_state)
+        res2 = self.s2.propagate(A.meet(self.b.negate(), optim_state), optim_state)
+        if optim_state.smooth:
+            return res1.smooth_join([res1, res2])
+        else:
+            return res1.join(res2)
     
 class BoolConditional(object, metaclass=abc.ABCMeta):
     @abc.abstractmethod
@@ -58,6 +65,7 @@ class IntervalBool(BoolConditional):
     
     Requires:
         b: 
+        c:
     """
     def __init__(self, b, c):
         assert(not torch.isinf(b).any())
