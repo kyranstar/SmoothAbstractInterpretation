@@ -1,6 +1,8 @@
 import abc
 from functools import reduce
 import torch
+from abdomain import AbsInterval
+
 
 class ProgramStatement(object, metaclass=abc.ABCMeta):
     @abc.abstractmethod
@@ -18,6 +20,9 @@ class ProgramStatement(object, metaclass=abc.ABCMeta):
 class AssignStatement(ProgramStatement):
     """
     Represents assignment statements of the form x := Mx + C
+    Arguments:
+        M: A tensor of size bxb
+        C: A tensor of size b 
     """
     def __init__(self, M, C):
         self.M = M
@@ -27,6 +32,9 @@ class AssignStatement(ProgramStatement):
         return A.affine_transform(self.M, self.C)
     
 class StatementBlock(ProgramStatement):
+    """
+    Represents multiple statements in a row: S1; S2; S3...
+    """
     def __init__(self, statements):
         self.statements = statements
     
@@ -37,6 +45,17 @@ class StatementBlock(ProgramStatement):
         return res
     
 class IfThenElse(ProgramStatement):
+    """
+    Represents an if then else statement:
+        if b then:
+            s1;
+        else:
+            s2;
+    Requires:
+        b: A BoolConditional
+        s1: the "then" block
+        s2: the "else" block
+    """
     def __init__(self, b, s1, s2):
         self.b = b
         self.s1 = s1
@@ -49,19 +68,43 @@ class IfThenElse(ProgramStatement):
             return res1.smooth_join([res1, res2])
         else:
             return res1.join(res2)
-    
+
+class AssertStatement(ProgramStatement):
+    def __init__(self, b):
+        self.b = b
+        
+    def propagate(self, A, optim_state):
+        optim_state.add_loss(self.b, A)
+        return A
+
 class BoolConditional(object, metaclass=abc.ABCMeta):
     @abc.abstractmethod
     def negate(self):
         raise NotImplementedError('users must define negate to use this base class')
     
+    
+class InferParameter:
+    def __init__(self, ind):
+        self.ind = ind
+        
+class ReturnStatement(ProgramStatement):
+    def __init__(self, v, c):
+        self.v = v
+        self.c = c
+        
+    def propagate(self, A, optim_state):
+        # TODO
+        Ap = AbsInterval(self.v*A.L + self.c, self.v*A.H + self.c, A.alpha)
+        optim_state.add_loss(Ap.signed_volume())
+        return A
+        
 class IntervalBool(BoolConditional):
     """
     Represents a boolean conditional for the interval domain. 
     It says that for each dimension i, bi*xi + ci >= 0, where xi
     
     Example:
-        To represent 2*x1 > 1000 && x2 < 5: b = [2, -1], c = [-1000, 5]
+        To represent 2*x1 >= 1000 && x2 <= 5: b = [2, -1], c = [-1000, 5]
     
     Requires:
         b: 
