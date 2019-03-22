@@ -14,7 +14,7 @@ class AbstractObject(object, metaclass=abc.ABCMeta):
         """
         raise NotImplementedError('users must define affine_transform to use this base class')
     @abc.abstractmethod
-    def meet(self, b):
+    def meet(self, b, optim_state):
         """
         Takes the classical meet between this abstract object and 
         the abstract object representing the points that satisfy 
@@ -23,6 +23,7 @@ class AbstractObject(object, metaclass=abc.ABCMeta):
         
         Requires:
             b: a BoolConditional
+            optim_state:
         """
         raise NotImplementedError('users must define meet to use this base class')
     @abc.abstractmethod
@@ -61,8 +62,8 @@ class AbsInterval(AbstractObject):
             alpha: A number that represents how close this interval is to disappearing
         """
         assert(not torch.isnan(L).any())
-        #assert(not torch.isinf(L).any())
         assert(not torch.isnan(H).any())
+        #assert(not torch.isinf(L).any())
         #assert(not torch.isinf(H).any())
         assert(not math.isnan(alpha))
         assert(not math.isinf(alpha))
@@ -80,7 +81,9 @@ class AbsInterval(AbstractObject):
     
     def __eq__(self, other):
         if isinstance(other, AbsInterval):
-            return torch.equal(self.L, other.L) and torch.equal(self.H, other.H) and math.isclose(self.alpha, other.alpha, rel_tol=1e-5)
+            Leq = torch.all(torch.lt(torch.abs(torch.add(self.L, -other.L)), 1e-12))
+            Heq = torch.all(torch.lt(torch.abs(torch.add(self.H, -other.H)), 1e-12))
+            return Leq and Heq and math.isclose(self.alpha, other.alpha, rel_tol=1e-5)
         return False
     
     def affine_transform(self, M, C):
@@ -167,14 +170,18 @@ class AbsInterval(AbstractObject):
         # TODO implement for infinite intervals
         assert(not torch.isinf(torch.tensor([O.volume() for O in obs])).any())
         
-        obs = [o for o in obs if o.alpha > 0.0 and not (o.L.eq(float('inf')) & o.H.eq(float('-inf'))).any()]
+        finite_obs = [o for o in obs if o.alpha > 0.0 and not (o.L.eq(float('inf')) & o.H.eq(float('-inf'))).any()]
         
-        alphas = torch.tensor([o.alpha for o in obs])
+        if not finite_obs:
+            print("NO FINITE OBJECTS")
+            print(obs)
+        
+        alphas = torch.tensor([o.alpha for o in finite_obs])
         a_sum = torch.sum(alphas)
         ap = alphas/torch.max(alphas)
         # Centers and widths for each obj
-        c = torch.stack([(o.L + o.H)/2 for o in obs])
-        w = torch.stack([(o.H - o.L)/2 for o in obs])
+        c = torch.stack([(o.L + o.H)/2 for o in finite_obs])
+        w = torch.stack([(o.H - o.L)/2 for o in finite_obs])
         
         # the center of gravity of interval centers
         c_out = (torch.sum(c*alphas[:, None], 0))/a_sum
@@ -199,14 +206,14 @@ class AbsInterval(AbstractObject):
         Creates an updated alpha value based on the new interval.
         i.e., given the L and H calculated in O.meet(b), returns rho(O, b).
         """        
-        f_beta = min(1/2, optim_state.lambda_const * optim_state.beta)
+        f_beta = min(0.5, optim_state.lambda_const * optim_state.beta)
         if math.isinf(self.volume()):
             return 1 - f_beta
         else:
             vol = self.volume()
             if vol == 0:
                 return 1.0
-            return min(1, newInt.volume() / (f_beta * vol))
+            return min(1.0, newInt.volume() / (f_beta * vol))
     
     def volume(self):
         # If we are empty in any dimension, volume is 0
@@ -227,4 +234,4 @@ class AbsInterval(AbstractObject):
         return torch.sum(self.L + self.H)
     
     def is_empty(self):
-        return (self.H == float('-inf')).any() or (self.L == float('inf')).any()
+        return ((self.H == float('-inf')) & (self.L == float('inf'))).any()

@@ -74,8 +74,12 @@ class AssertStatement(ProgramStatement):
         self.b = b
         
     def propagate(self, A, optim_state):
-        optim_state.add_loss(self.b, A)
+        if A.meet(self.b.negate(), optim_state).volume() > 0:
+            optim_state.satisfied = False
+        
+        optim_state.add_loss(A.meet(b.negate()).volume())
         return A
+
 
 class BoolConditional(object, metaclass=abc.ABCMeta):
     @abc.abstractmethod

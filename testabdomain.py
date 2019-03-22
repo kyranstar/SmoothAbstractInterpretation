@@ -30,6 +30,7 @@ class IntervalTest(unittest.TestCase):
         self.assertEqual(val.meet(IntervalBool(torch.tensor([0.0, 0.0]), torch.tensor([0.0, 1.0])), t_os), 
                          val)
     
+    
     def test_meet_prog(self):
         x1 = AbsInterval(torch.tensor([-10.0, 0.5]), torch.tensor([1.0, 0.5]), 1.0)
         x2 = AbsInterval(torch.tensor([-10.0, -0.5]), torch.tensor([1.0, -0.5]), 1.0)

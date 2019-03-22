@@ -21,6 +21,17 @@ class ProgramTest(unittest.TestCase):
         # x in [-0.5, 10]
         self.assertEqual(program.propagate(x, t_os),
                          AbsInterval(torch.tensor([-0.5]), torch.tensor([10.0]), 1.0))
+        
+    def test_ite_bad_ex(self):
+        val = AbsInterval(torch.tensor([-10.0, 0.0]), torch.tensor([1.0, -0.0001]))
+        program = StatementBlock([
+                    IfThenElse(IntervalBool(torch.tensor([0.0, 1.0]), torch.tensor([0.0, 0.0])), 
+                                  AssignStatement(torch.tensor([[2.0, 1.0], 
+                                                               [0.0, 1.0]]), torch.tensor([0.0, 0.0])), 
+                                  AssignStatement(torch.tensor([[0.0, 0.0], 
+                                                               [0.0, 1.0]]), torch.tensor([700.0, 0.0]))),
+                    ReturnStatement(torch.tensor([1.0, 0.0]), torch.tensor([0.0, 0.0]))
+                    ])
     def test_ite_alwaystrue(self):
         # x in [-1, 5]
         x = AbsInterval(torch.tensor([-1.0]), torch.tensor([5.0]), 1.0)
