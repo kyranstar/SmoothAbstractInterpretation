@@ -170,11 +170,8 @@ class AbsInterval(AbstractObject):
         # TODO implement for infinite intervals
         assert(not torch.isinf(torch.tensor([O.volume() for O in obs])).any())
         
-        finite_obs = [o for o in obs if o.alpha > 0.0 and not (o.L.eq(float('inf')) & o.H.eq(float('-inf'))).any()]
-        
-        if not finite_obs:
-            print("NO FINITE OBJECTS")
-            print(obs)
+        finite_obs = [o for o in obs if o.alpha > 0.0 and not (o.L.eq(float('-inf')) & o.H.eq(float('inf'))).any()]
+        infinite_obs = [o for o in obs if o.alpha > 0.0 and (o.L.eq(float('-inf')) & o.H.eq(float('inf'))).any()]
         
         alphas = torch.tensor([o.alpha for o in finite_obs])
         a_sum = torch.sum(alphas)
@@ -198,6 +195,13 @@ class AbsInterval(AbstractObject):
         H, _ = torch.max(Hi, 0)
         
         a_out = min(a_sum, 1.0)
+        
+        # sum the infinite objects into one universal element
+        #inf_ob = AbsInterval(torch.zeros(L.size()), torch.zeros(H.size()), min(sum([o.alpha for o in infinite_obs]), 1.0))
+        #for ob in infinite_obs:
+        #    inf_ob.L += ob.L
+        #    inf_ob.H += ob.H
+        
         return AbsInterval(L, H, a_out)
 
     

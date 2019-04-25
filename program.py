@@ -2,6 +2,7 @@ import abc
 from functools import reduce
 import torch
 from abdomain import AbsInterval
+from expression import Expression
 
 
 class ProgramStatement(object, metaclass=abc.ABCMeta):
@@ -17,6 +18,7 @@ class ProgramStatement(object, metaclass=abc.ABCMeta):
         """
         raise NotImplementedError('users must define propagate to use this base class')
         
+        
 class AssignStatement(ProgramStatement):
     """
     Represents assignment statements of the form x := Mx + C
@@ -24,12 +26,21 @@ class AssignStatement(ProgramStatement):
         M: A tensor of size bxb
         C: A tensor of size b 
     """
-    def __init__(self, M, C):
-        self.M = M
-        self.C = C
+    def __init__(self, i, E):
+        assert(isinstance(E, Expression))
+        assert(type(i) == int)
+        self.E = E
+        self.i = i
     
     def propagate(self, A, optim_state):
-        return A.affine_transform(self.M, self.C)
+        Lval, Hval = self.E.evaluate(A)
+        #print("L:%s, H:%s" % (str(Lval), str(Hval)))
+        L = A.L.clone()
+        H = A.H.clone()
+        L[self.i] = Lval
+        H[self.i] = Hval
+
+        return AbsInterval(L, H, A.alpha)    
     
 class StatementBlock(ProgramStatement):
     """
@@ -43,6 +54,10 @@ class StatementBlock(ProgramStatement):
         for stmt in self.statements:
             res = stmt.propagate(res, optim_state)
         return res
+    
+class NoOp(ProgramStatement):
+    def propagate(self, A, optim_state):
+        return A
     
 class IfThenElse(ProgramStatement):
     """
@@ -77,7 +92,7 @@ class AssertStatement(ProgramStatement):
         if A.meet(self.b.negate(), optim_state).volume() > 0:
             optim_state.satisfied = False
         
-        optim_state.add_loss(A.meet(b.negate()).volume())
+        optim_state.add_loss(A.meet(self.b.negate(), optim_state).volume())
         return A
 
 
@@ -86,21 +101,18 @@ class BoolConditional(object, metaclass=abc.ABCMeta):
     def negate(self):
         raise NotImplementedError('users must define negate to use this base class')
     
-    
-class InferParameter:
-    def __init__(self, ind):
-        self.ind = ind
-        
+
 class ReturnStatement(ProgramStatement):
-    def __init__(self, v, c):
-        self.v = v
-        self.c = c
+    """
+    """
+    def __init__(self, expr):
+        self.expr = expr
         
     def propagate(self, A, optim_state):
-        # TODO
-        Ap = AbsInterval(self.v*A.L + self.c, self.v*A.H + self.c, A.alpha)
+        L, H = self.expr.evaluate(A)
+        Ap = AbsInterval(L, H, A.alpha)
         optim_state.add_loss(Ap.signed_volume())
-        return A
+        return Ap
         
 class IntervalBool(BoolConditional):
     """
@@ -116,9 +128,7 @@ class IntervalBool(BoolConditional):
     """
     def __init__(self, b, c):
         assert(not torch.isinf(b).any())
-        assert(not torch.isinf(c).any())
         assert(not torch.isnan(b).any())
-        assert(not torch.isnan(c).any())
         self.b = b
         self.c = c
         
